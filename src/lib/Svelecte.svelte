@@ -1,5 +1,3 @@
-<svelte:options runes={false} />
-
 <script context="module">
   import defaults from './settings.js';
 
@@ -73,7 +71,8 @@
 </script>
 
 <script>
-  import { onMount, tick } from 'svelte';
+  import { createEventDispatcher, onMount, tick } from 'svelte';
+  import { writable } from 'svelte/store';
   import { flip } from 'svelte/animate';
   import TinyVirtualList from 'svelte-tiny-virtual-list';
   import { positionDropdown, scrollIntoView, virtualListDimensionsResolver } from './utils/dropdown.js';
@@ -82,7 +81,7 @@
   import { bindItem } from './utils/actions.js';
 
   /** @type {string} */
-  export let name = '';
+  export let name = 'svelecte';
   /** @type {string} */
   export let inputId = '';
   /** @type {boolean} */
@@ -127,6 +126,8 @@
   export let closeAfterSelect = defaults.closeAfterSelect;
   /** @type {function} */
   export let dndzone = () => ({ noop: true, destroy: () => {}});
+  /** @type {array} wrapper array for passing 'svelte-use-form validator action and its params '*/
+  export let validatorAction = [];
   /** @type {boolean} */
   export let strictMode = true;
   // multiple
@@ -190,29 +191,6 @@
   export let valueAsObject = defaults.valueAsObject;
   /** @type {string|number|null|undefined} */
   export let parentValue = undefined;
-  // event callbacks
-  export let onChange = readSelection => {};
-  export let onFocus = htmlInput => {};
-  export let onBlur = htmlInput => {};
-  export let onCreateOption = newObj => {};
-  export let onCreateFail = fail => {};
-  export let onEnterKey = event => {};
-  export let onFetch = data => {};
-  export let onFetchError = err => {};
-  export let onInvalidValue = val => {};
-  // snippets
-  /** @type {Function|undefined} */
-  export let prepend = undefined;
-  export let collapsedSelection = snippet_collapsedSelection;
-  export let selection = snippet_selection;
-  export let clearIcon = snippet_clearIcon;
-  export let toggleIcon = snippet_toggleIcon;
-  /** @type {Function|undefined} */
-  export let append = undefined;
-  /** @type {Function|undefined} */
-  export let listHeader = undefined;
-  export let option = snippet_option;
-  export let createRow = snippet_createRow;
 
   export function focus() {
     ref_input.focus();
@@ -240,21 +218,19 @@
     fetchResetOnBlur = false; // force this to preven 'clearSelection' clear fetched options
   }
 
-  const DOM_ID = name ? `sv-${name}-select-${`${Math.random()}`.substring(2, 6)}` : null;
-
-  if (required && !name) console.warn(`[Svelecte]: 'required' prop has no effect when 'name' prop is NOT set`)
+  const dispatch = createEventDispatcher();
+  const DOM_ID = `sv-${name}-select`;
 
   /** ************************************ preparation */
   /* possibility to provide initial (selected) values in `fetch` mode **/
   if (fetch && value && valueAsObject && (!options || (options && options.length === 0))) {
     options = Array.isArray(value) ? value : [value];
   }
-  if (!inputId) inputId = DOM_ID ? DOM_ID.replace('-select-', '-input-') : `svelecte-input-${`${Math.random()}`.substring(2, 12)}` ;
+  if (!inputId) inputId = `${DOM_ID}-input`;
   multiple = name && !multiple ? name.endsWith('[]') : multiple;
   /** ************************************ END preparation */
 
   let is_mounted = false;
-  let readSelection_bounded = readSelection ? true : false;
   // state-related
   let prev_value;
   let prev_options = optionResolver
@@ -349,10 +325,7 @@
    */
   $: itemRenderer = typeof renderer === 'function'
     ? renderer
-    : (renderer !== 'default' && stringFormatters[renderer]
-      ? stringFormatters[renderer]
-      : stringFormatters.default.bind({ label: currentLabelField})
-    );
+    : (stringFormatters[renderer] || stringFormatters.default.bind({ label: currentLabelField}));
 
   /** ************************************ dropdown-specific */
 
@@ -467,7 +440,7 @@
     clearSelection();
     if (passedVal !== null) {
       if ((multiple && !Array.isArray(passedVal)) || (!multiple && Array.isArray(passedVal))) {
-        console.warn(`[Svelecte]: Passed 'value' property should ${ multiple ? 'be' : 'NOT be'} an array`);
+        console.warn(`Passed 'value' property should ${ multiple ? 'be' : 'NOT be'} an array`);
       }
       // wait for fetch to be resolved
       if (fetch_initValue) return;
@@ -476,7 +449,7 @@
       const _selection = arrValue.reduce((res, val) => {
         // skip options scan when in valueAsObject non-strict mode
         if (valueAsObject && (!strictMode || (creatable && val.$created))) {
-          res.push(Object.fromEntries(Object.entries(val)));
+          res.push(val);
           return res;
         }
         const opt = options_flat.find(item => valueAsObject
@@ -509,33 +482,18 @@
         : _selection.length > 0
       );
 
-      // this is run only when invalid 'value' is provided, like out of option array
       if (!success) {
+        // this is run only when invalid 'value' is provided, like out of option array
         console.warn('[Svelecte]: provided "value" property is invalid', passedVal);
-        if (valueAsObject && strictMode && fetch) {
-          console.warn(`[Svelecte]: with 'fetch' and 'valueAsObject' set make sure 'strictMode' is set to false to be to set initial value`);
-        }
         value = multiple ? [] : null;
         readSelection = value;
-        onInvalidValue(passedVal);
+        dispatch('invalidValue', passedVal);
         return;
       }
-      if (readSelection_bounded) {
-        // remove '$selected' property
-        readSelection = multiple
-          ? _selection.map(opt => {
-            delete opt['$selected'];
-            return opt;
-          })
-          : Object.fromEntries(
-              Object.entries(_selection.shift()).filter(opt => opt[0][0] !== '$')
-          );
-      }
+      readSelection = Array.isArray(passedVal) ? _selection : _selection.shift();
     }
     prev_value = passedVal;
   }
-
-  let is_user_action = false;
 
   /**
    * Reflect bound `value` to the outside word
@@ -545,10 +503,7 @@
     if (is_dragging) return;
     const selection_formatted = newSelection
       .map(opt => {
-        const obj = {};
-        for (let [prop, val] of Object.entries(opt)) {
-          if (prop[0] !== '$') obj[prop] = val;
-        }
+        const { '$disabled': unused1,  '$isGroupItem': unused2, ...obj } = opt;
         return obj;
       });
     const unified_selection = multiple
@@ -562,11 +517,8 @@
     } else {
       prev_value = unified_selection;
     }
-    if (is_user_action) {
-      value = prev_value;
-      readSelection = unified_selection;
-    }
-    is_user_action = false;
+    value = prev_value;
+    readSelection = unified_selection;
     if (max && newSelection.length === max) {
       listMessage = i18n_actual.max(max);
     }
@@ -678,13 +630,20 @@
    */
    function emitChangeEvent() {
     tick().then(() => {
-      onChange(readSelection);
+      dispatch('change', readSelection);
       if (ref_select_element) {
+        ref_select_element.dispatchEvent(new Event('input'));   // required for svelte-use-form
         ref_select_element.dispatchEvent(new Event('change'));  // typically you expect change event to be fired
       }
     });
   }
 
+  /**
+   * Dispatch createoption event when user creates a new entry (with 'creatable' feature)
+   */
+  function emitCreateEvent(createdOpt) {
+      dispatch('createoption', createdOpt)
+  }
   // #endregion
 
   // #region [interactivity]
@@ -717,14 +676,14 @@
           !fetch && alreadyCreated.push(opt);
           newObj.$created = true;  // internal setter
           if (keepCreated) prev_options = [...prev_options, newObj];
-          onCreateOption(newObj);
+          emitCreateEvent(newObj);
           selectOption(newObj);
           onSelectTeardown();
           emitChangeEvent();
         })
         .catch(e => {
           isCreating = false;
-          onCreateFail({
+          dispatch('createFail', {
             input: opt,
             error: e
           });
@@ -735,7 +694,6 @@
 
     selectOption(opt);
     onSelectTeardown();
-    is_user_action = true;
     emitChangeEvent();
   }
 
@@ -800,7 +758,6 @@
     } else {  // apply for 'x' when clearable:true || ctrl+backspace || ctrl+delete
       clearSelection();
     }
-    is_user_action = true;
     emitChangeEvent();
   }
 
@@ -860,8 +817,7 @@
       :options_flat;
   }
 
-  function on_create(event) {
-    event.preventDefault();
+  function onCreate(_event) {
     if (alreadyCreated.includes(input_value)) return;
 
     onSelect(null, input_value);
@@ -940,7 +896,7 @@
       case Tab:
       case 'Enter':
         if (!is_dropdown_opened) {
-          event.key !== Tab && onEnterKey(event); // ref #125
+          event.key !== Tab && dispatch('enterKey', event); // ref #125
           return;
         }
         let activeDropdownItem = !ctrlKey ? options_filtered[dropdown_index] : null;
@@ -956,7 +912,7 @@
         }
         if (!activeDropdownItem && selectedOptions.length) {
           is_dropdown_opened = false;
-          event.key !== Tab && onEnterKey(event); // ref #125
+          event.key !== Tab && dispatch('enterKey', event); // ref #125
           return;
         }
         (event.key !== Tab || (event.key === Tab && selectOnTab !== 'select-navigate')) && event.preventDefault(); // prevent form submit
@@ -986,7 +942,7 @@
    * Prevent focus change
    * @param {MouseEvent} event
    */
-  function on_mouse_down(event) {
+  function onMouseDown(event) {
     event.preventDefault();
   }
 
@@ -995,7 +951,7 @@
    *
    * @param {MouseEvent & { currentTarget: EventTarget & HTMLDivElement} & { target: HTMLElement }} event
    */
-  function on_click(event) {
+  function onClick(event) {
     if (disabled) return;
     /** @type {HTMLElement & import('./utils/actions.js').ExtButton} */
     const target = event.target.closest('[data-action]');
@@ -1039,7 +995,7 @@
   /**
    * @param {KeyboardEvent} e
    */
-   function on_key_down(e) {
+   function onKeyDown(e) {
     if (android() && !enter_hint && e.key === 'Enter') return true;
 
     disable_key_event_bubble = ['Enter', 'Escape'].includes(e.key) && is_dropdown_opened;
@@ -1049,7 +1005,7 @@
   /**
    * @param {KeyboardEvent} e
    */
-  function on_key_up(e) {
+  function onKeyUp(e) {
     if (disable_key_event_bubble) {
       e.stopImmediatePropagation();
       e.preventDefault();
@@ -1060,23 +1016,23 @@
   /**
    * Required for mobile single select to work properly
    */
-  function on_input() {
+  function onInput() {
     if (selectedOptions.length === 1 && !multiple) {
       // input_value = '';
     }
   }
 
-  function on_focus() {
+  function onFocus() {
     is_focused = true;
     is_dropdown_opened = focus_by_mouse;
     if (!is_tainted) is_tainted = true;
     collapseSelection === 'blur' && !is_dragging && setTimeout(() => {
       doCollapse = false;
     }, 100);
-    onFocus(ref_input);
+    dispatch('focus', ref_input);
   }
 
-  function on_blur() {
+  function onBlur() {
     is_focused = false;
     is_dropdown_opened = false;
     focus_by_mouse = false;
@@ -1088,13 +1044,13 @@
     collapseSelection === 'blur' && !is_dragging && setTimeout(() => {
       doCollapse = true;
     }, 100);
-    onBlur(ref_input);
+    dispatch('blur', ref_input);
   }
 
   /**
    * Enable create items by pasting
    */
-   function on_paste(event) {
+   function onPaste(event) {
     if (creatable) {
       event.preventDefault();
       const rx = new RegExp('([^' + delimiter + '\\n]+)', 'g');
@@ -1111,9 +1067,8 @@
     // do nothing otherwise
   }
 
-  function on_dnd_event(e) {
+  function onDndEvent(e) {
     is_dragging = e.type === 'consider';
-    is_user_action = !is_dragging;
     selectedOptions = e.detail.items;
     if (!is_dragging) {
       emitChangeEvent();
@@ -1170,6 +1125,20 @@
   }
 
   /**
+   * Holder for AbortController implemented as store because of reactivity delays
+   *
+   * @type {import('svelte/store').Writable<{control:AbortController}>}
+   */
+  let fetch_store = writable({control: null});
+  /**
+   * @param {AbortController?} control
+   */
+  const fetch_reset = (control = null) => fetch_store.update(val => {
+    val.control?.abort();
+    return { control };
+  })
+
+  /**
    * User only for QUERY mode
    *
    * @param {string} inputValue
@@ -1177,7 +1146,7 @@
   function trigger_fetch(inputValue) {
     if (fetch_initOnly || maxReached) return;
     if (debouncedFetch) {
-      fetch_controller?.abort();
+      fetch_reset();
       isFetchingData = true;
       if (input_value.length < minQuery) {
         isFetchingData = false;
@@ -1200,7 +1169,7 @@
    * @param {FetchOptions} opts
    */
   function fetch_runner(opts = {}) {
-    fetch_controller?.abort();
+    fetch_reset();
     if ((opts.init !== true && !input_value.length) || (is_fetch_dependent && !parentValue)) {
       isFetchingData = false;
       if (fetchResetOnBlur) {
@@ -1221,14 +1190,14 @@
     if (fetch_initOnly) listMessage = i18n_actual.fetchInit;
 
     const built = defaults.requestFactory(input_value, { parentValue, url: fetch, initial }, fetchProps);
-    fetch_controller?.abort();
     fetch_controller = built.controller;
+    fetch_reset(built.controller);
     window.fetch(built.request)
       .then(resp => resp.json())
       // success
       .then((/** @type {object} */ json) => {
         // sveltekit returns error property
-        if (!Array.isArray(json) && json?.error) onFetchError(json.error);
+        if (!Array.isArray(json) && json?.error) dispatch('fetchError', json.error);
         return Promise.resolve(fetchCallback
           ? fetchCallback(json)
           : (json.data || json.items || json.options || json)
@@ -1239,7 +1208,7 @@
               data = [];
             }
             prev_options = data;
-            onFetch(data);
+            dispatch('fetch', data);
 
             tick().then(() => {
               if (initial) {
@@ -1254,7 +1223,7 @@
       .catch(e => {
         if (e instanceof DOMException && e.name === 'AbortError') return true;
         prev_options = [];
-        onFetchError(e);
+        dispatch('fetchError', e);
         console.warn('[Svelecte] Fetch Error:', e);
       })
       // teardown
@@ -1367,6 +1336,9 @@
 
   //#endregion
 
+  const svelte_use_form_validator = validatorAction.length
+    ? validatorAction.shift()
+    : () => {}; // noop
 
   onMount(() => {
     is_mounted = true;
@@ -1389,7 +1361,7 @@
       });
     } else if (selectedOptions.length) {
       setTimeout(() => {
-        Array.from(ref_select_element?.children || []).forEach((/** @type {HTMLOptionElement} */ opt) => {
+        ref_select_element && Array.from(ref_select_element.children).forEach((/** @type {HTMLOptionElement} */ opt) => {
           opt.selected = true;
         });
       }, 200);
@@ -1397,54 +1369,6 @@
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) flipDurationMs = 0;
   });
 </script>
-
-{#snippet snippet_collapsedSelection(selectedOptions, i18n)}
-  <span>{i18n.collapsedSelection(selectedOptions.length)}</span>
-{/snippet}
-
-{#snippet snippet_selection(selectedOptions, bindItemAction)}
-  {#each selectedOptions as opt (opt[currentValueField])}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="sv-item--container" animate:flip={{duration: flipDurationMs }} onmousedown={e => e.preventDefault()}>
-    <div class="sv-item--wrap in-selection" class:is-multi={multiple}>
-      <div class="sv-item--content">{@html itemRenderer(opt, true)}</div>
-    </div>
-    {#if multiple}
-    <button class="sv-item--btn" tabindex="-1" type="button"
-      data-action="deselect"
-      use:bindItemAction={opt}
-    >
-      <svg height="16" width="16" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
-        <path d="M14.348 14.849c-0.469 0.469-1.229 0.469-1.697 0l-2.651-3.030-2.651 3.029c-0.469 0.469-1.229 0.469-1.697 0-0.469-0.469-0.469-1.229 0-1.697l2.758-3.15-2.759-3.152c-0.469-0.469-0.469-1.228 0-1.697s1.228-0.469 1.697 0l2.652 3.031 2.651-3.031c0.469-0.469 1.228-0.469 1.697 0s0.469 1.229 0 1.697l-2.758 3.152 2.758 3.15c0.469 0.469 0.469 1.229 0 1.698z"></path>
-      </svg>
-    </button>
-    {/if}
-  </div>
-  {/each}
-{/snippet}
-
-{#snippet snippet_clearIcon(_selectedOptions, _inputValue)}
-  {#if selectedOptions.length}
-    <svg class="indicator-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M14.348 14.849c-0.469 0.469-1.229 0.469-1.697 0l-2.651-3.030-2.651 3.029c-0.469 0.469-1.229 0.469-1.697 0-0.469-0.469-0.469-1.229 0-1.697l2.758-3.15-2.759-3.152c-0.469-0.469-0.469-1.228 0-1.697s1.228-0.469 1.697 0l2.652 3.031 2.651-3.031c0.469-0.469 1.228-0.469 1.697 0s0.469 1.229 0 1.697l-2.758 3.152 2.758 3.15c0.469 0.469 0.469 1.229 0 1.698z"></path></svg>
-  {/if}
-{/snippet}
-
-{#snippet snippet_toggleIcon(_dropdownShow)}
-<svg class="indicator-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
-  <path d="M4.516 7.548c0.436-0.446 1.043-0.481 1.576 0l3.908 3.747 3.908-3.747c0.533-0.481 1.141-0.446 1.574 0 0.436 0.445 0.408 1.197 0 1.615-0.406 0.418-4.695 4.502-4.695 4.502-0.217 0.223-0.502 0.335-0.787 0.335s-0.57-0.112-0.789-0.335c0 0-4.287-4.084-4.695-4.502s-0.436-1.17 0-1.615z"></path>
-</svg>
-{/snippet}
-
-{#snippet snippet_option(opt)}
-<div class="sv-item--content">
-  {@html highlightSearch(opt, false, input_value, itemRenderer, disableHighlight) }
-</div>
-{/snippet}
-
-{#snippet snippet_createRow(isCreating, inputValue, i18n)}
-<span class:is-loading={isCreating}>{i18n.createRowLabel(input_value)}</span>
-<span class="shortcut"><kbd>{meta_key}</kbd>+<kbd>Enter</kbd></span>
-{/snippet}
 
 <div class={`svelecte ${className}`}
   class:is-required={required}
@@ -1466,26 +1390,50 @@
   {#if name && !anchor_element}
   <select {name} {required} {multiple} {disabled} size="1" class="sv-hidden-element" id={DOM_ID} tabindex="-1" aria-hidden="true"
     bind:this={ref_select_element}
+    use:svelte_use_form_validator={validatorAction}
   >
     {#each selectedOptions as opt (opt[currentValueField])}
     <option value={opt[currentValueField]} selected></option>
     {/each}
   </select>
   {/if}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="sv-control" onmousedown={on_mouse_down} onclick={on_click}>
-    {#if prepend}{@render prepend()}{/if}
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <!-- svelte-ignore a11y-click-events-have-key-events -->
+  <div class="sv-control" on:mousedown={onMouseDown} on:click={onClick}
+  >
+    <slot name="icon"></slot>
     <!-- #region selection & input -->
     <div class="sv-control--selection" class:is-single={multiple === false} class:has-items={selectedOptions.length > 0} class:has-input={input_value.length}
       use:dndzone={{items: selectedOptions, flipDurationMs, type: inputId, dragDisabled: doCollapse }}
-      onconsider={on_dnd_event}
-      onfinalize={on_dnd_event}
+      on:consider={onDndEvent}
+      on:finalize={onDndEvent}
     >
-      {#if selectedOptions.length && multiple && doCollapse}
-        {@render collapsedSelection(selectedOptions, i18n_actual)}
+      {#if selectedOptions.length }
+      {#if multiple && doCollapse}
+        <slot name="collapsedSelection" {selectedOptions} i18n={i18n_actual}>{i18n_actual.collapsedSelection(selectedOptions.length)}</slot>
       {:else}
-        {@render selection(selectedOptions, bindItem)}
+        <slot name="selection" {selectedOptions} {bindItem}>
+          {#each selectedOptions as opt (opt[currentValueField])}
+          <div class="sv-item--container" animate:flip={{duration: flipDurationMs }}
+            on:mousedown|preventDefault
+          >
+            <div class="sv-item--wrap" class:is-multi={multiple}>
+              <div class="sv-item--content">{@html itemRenderer(opt, true)}</div>
+            </div>
+            {#if multiple}
+            <button class="sv-item--btn" tabindex="-1" type="button"
+              data-action="deselect"
+              use:bindItem={opt}
+            >
+              <svg height="16" width="16" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                <path d="M14.348 14.849c-0.469 0.469-1.229 0.469-1.697 0l-2.651-3.030-2.651 3.029c-0.469 0.469-1.229 0.469-1.697 0-0.469-0.469-0.469-1.229 0-1.697l2.758-3.15-2.759-3.152c-0.469-0.469-0.469-1.228 0-1.697s1.228-0.469 1.697 0l2.652 3.031 2.651-3.031c0.469-0.469 1.228-0.469 1.697 0s0.469 1.229 0 1.697l-2.758 3.152 2.758 3.15c0.469 0.469 0.469 1.229 0 1.698z"></path>
+              </svg>
+            </button>
+            {/if}
+          </div>
+          {/each}
+        </slot>
+        {/if}
       {/if}
 
       <!-- #regions INPUT -->
@@ -1501,12 +1449,12 @@
           autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" aria-autocomplete="list" tabindex="0"
           bind:this={ref_input}
           bind:value={input_value}
-          onfocus={on_focus}
-          onkeydown={on_key_down}
-          onkeyup={on_key_up}
-          oninput={on_input}
-          onblur={on_blur}
-          onpaste={on_paste}
+          on:focus={onFocus}
+          on:keydown={onKeyDown}
+          on:keyup={onKeyUp}
+          on:input={onInput}
+          on:blur={onBlur}
+          on:paste={onPaste}
           >
       </span>
       <!-- #endregion -->
@@ -1519,29 +1467,37 @@
       <button type="button" class="sv-btn-indicator" class:sv-has-selection={selectedOptions.length}
         data-action="deselect"  tabindex="-1"
       >
-        {@render clearIcon(input_value)}
+        <slot name="clear-icon" {selectedOptions} inputValue={input_value}>
+          {#if selectedOptions.length}
+          <svg class="indicator-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M14.348 14.849c-0.469 0.469-1.229 0.469-1.697 0l-2.651-3.030-2.651 3.029c-0.469 0.469-1.229 0.469-1.697 0-0.469-0.469-0.469-1.229 0-1.697l2.758-3.15-2.759-3.152c-0.469-0.469-0.469-1.228 0-1.697s1.228-0.469 1.697 0l2.652 3.031 2.651-3.031c0.469-0.469 1.228-0.469 1.697 0s0.469 1.229 0 1.697l-2.758 3.152 2.758 3.15c0.469 0.469 0.469 1.229 0 1.698z"></path></svg>
+          {/if}
+        </slot>
       </button>
       {/if}
       {#if clearable}<span class="sv-btn-separator"></span>{/if}
       <button type="button" class="sv-btn-indicator" class:sv-dropdown-opened={is_dropdown_opened}
         data-action="toggle" tabindex="-1"
       >
-        {@render toggleIcon(is_dropdown_opened)}
+        <slot name="dropdown-toggle" isOpen={is_dropdown_opened}>
+          <svg class="indicator-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+            <path d="M4.516 7.548c0.436-0.446 1.043-0.481 1.576 0l3.908 3.747 3.908-3.747c0.533-0.481 1.141-0.446 1.574 0 0.436 0.445 0.408 1.197 0 1.615-0.406 0.418-4.695 4.502-4.695 4.502-0.217 0.223-0.502 0.335-0.787 0.335s-0.57-0.112-0.789-0.335c0 0-4.287-4.084-4.695-4.502s-0.436-1.17 0-1.615z"></path>
+          </svg>
+        </slot>
       </button>
     </div>
-    {#if append}{@render append()}{/if}
+    <slot name="control-end"></slot>
     <!-- #endregion -->
   </div>
 
   <!-- #region DROPDOWN -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <!-- svelte-ignore a11y-click-events-have-key-events -->
   <div class="sv_dropdown" class:is-open={dropdown_show}
-    onmousedown={on_mouse_down}
-    onclick={on_click}
+    on:mousedown={onMouseDown}
+    on:click={onClick}
   >
   {#if is_mounted && render_dropdown}
-      {#if listHeader}{@render listHeader()}{/if}
+      <slot name="list-header" />
       <div bind:this={ref_container_scroll} class="sv-dropdown-scroll" class:has-items={options_filtered.length>0} class:is-virtual={virtualList} tabindex="-1">
         <div bind:this={ref_container} class="sv-dropdown-content" class:max-reached={maxReached} >
         {#if options_filtered.length}
@@ -1565,7 +1521,12 @@
                     class:is-selected={opt.$selected}
                     class:is-disabled={opt[disabledField]}
                   >
-                    {@render option(opt)}
+                    <slot name="option-icon"/>
+                    <slot name="option" item={opt} inputValue={input_value} {itemRenderer} selected={opt.$selected}>
+                      <div class="sv-item--content">
+                        {@html highlightSearch(opt, false, input_value, itemRenderer, disableHighlight) }
+                      </div>
+                    </slot>
                   </div>
                 {/if}
               </div>
@@ -1581,25 +1542,32 @@
                   class:is-selected={opt.$selected}
                   class:is-disabled={opt[disabledField]}
                 >
-                  {@render option(opt)}
+                  <slot name="option" item={opt}>
+                    <div class="sv-item--content">
+                      {@html highlightSearch(opt, false, input_value, itemRenderer, disableHighlight) }
+                    </div>
+                  </slot>
                 </div>
               {/if}
             {/each}
           {/if}
         {:else if options_filtered.length === 0 && (!creatable || !input_value) || maxReached}
           <div class="is-dropdown-row">
-            <div class="sv-item--wrap in-dropdown"><div class="sv-item--content">{listMessage}</div></div>
+            <div class="sv-item--wrap"><div class="sv-item--content">{listMessage}</div></div>
           </div>
         {/if}
       </div>
     </div> <!-- scroll container end -->
     {#if creatable && input_value && !maxReached}
       <div class="is-dropdown-row">
-        <button type="button" class="creatable-row" onclick={on_create} onmousedown={e => e.preventDefault()}
+        <button type="button" class="creatable-row" on:click|preventDefault={onCreate} on:mousedown|preventDefault
           class:active={(options_filtered.length ? options_filtered.length : 0) === dropdown_index}
           class:is-disabled={createFilter(input_value)}
         >
-          {@render createRow(isCreating, input_value, i18n_actual)}
+          <slot name="create-row" {isCreating} inputValue={input_value} i18n={i18n_actual}>
+            <span class:is-loading={isCreating}>{i18n_actual.createRowLabel(input_value)}</span>
+            <span class="shortcut"><kbd>{meta_key}</kbd>+<kbd>Enter</kbd></span>
+          </slot>
         </button>
       </div>
     {/if}
@@ -1615,16 +1583,13 @@
   /* stylable props */
   /*
   :root {
-    --sv-min-height: 34px;
+    --sv-min-height: 30px;
     --sv-bg: #fff;
     --sv-disabled-bg: #eee;
     --sv-border: 1px solid #ccc;
     --sv-border-radius: 4px;
-    --sv-selection-gap: 4px;
     --sv-general-padding: 4px;
     --sv-control-bg: var(--sv-bg);
-    --sv-selection-wrap-padding: 0px 3px 0px 4px;
-    --sv-selection-multi-wrap-padding: 0px 3px 0px 6px;
     --sv-item-wrap-padding: 3px 3px 3px 6px;
     --sv-item-selected-bg: #efefef;
     --sv-item-btn-color: #000;
@@ -1679,7 +1644,7 @@
     border: var(--sv-border, 1px solid #ccc);
     border-radius: var(--sv-border-radius, 4px);
     background-color: var(--sv-control-bg, var(--sv-bg, #fff));
-    min-height: var(--sv-min-height, 34px);
+    min-height: var(--sv-min-height, 30px);
   }
 
   .sv-control--selection {
@@ -1688,8 +1653,8 @@
     align-items: center;
     flex: 1;
     min-width: 0;
-    gap: var(--sv-selection-gap, 4px);
-    padding: var(--sv-selection-gap, var(--sv-general-padding, 4px));
+    gap: 4px;
+    padding: var(--sv-general-padding, 4px);
     min-height: 24px;
     &.is-single {
       flex-wrap: nowrap;
@@ -1702,18 +1667,12 @@
   :global(.sv-item--wrap) {
     display: flex;
     min-width: 0;
-  }
-  :global(.sv-item--wrap.in-selection) {
-    padding: var(--sv-selection-wrap-padding, 0px 3px 0px 4px);
-  }
-  :global(.sv-item--wrap.is-multi) {
-    padding: var(--sv-selection-multi-wrap-padding, 0px 3px 0px 6px);
-    background-color: var(--sv-item-selected-bg, #efefef);
-  }
-  :global(.sv-item--wrap.in-dropdown) {
     padding: var(--sv-item-wrap-padding, 3px 3px 3px 6px);
-  }
+    &.is-multi {
+      background-color: var(--sv-item-selected-bg, #efefef);
+    }
 
+  }
   :global(.sv-item--content) {
     overflow: hidden;
     white-space: nowrap;
@@ -1732,19 +1691,20 @@
     margin: 0;
     cursor: pointer;
     background-color: var(--sv-item-btn-bg, var(--sv-item-selected-bg, #efefef));
+
+    & > svg {
+      fill: var(--sv-item-btn-color, var(--sv-icon-color, #bbb));
+    }
+    &:hover {
+      background-color: var(--sv-item-btn-bg-hover, #ddd);
+      & > svg {
+        fill: var(--sv-item-btn-color-hover, #777);
+      }
+    }
   }
 
 
   /** #region ************************************ buttons */
-  :global(.sv-item--btn > svg) {
-    fill: var(--sv-item-btn-color, var(--sv-icon-color, #bbb));
-  }
-  :global(.sv-item--btn:hover) {
-    background-color: var(--sv-item-btn-bg-hover, #ddd);
-  }
-  :global(.sv-item--btn:hover > svg) {
-    fill: var(--sv-item-btn-color-hover, #777);
-  }
 
   .sv-buttons {
     display: flex;
@@ -1889,12 +1849,11 @@
       cursor: not-allowed;
     }
 
-  }
-  /* moved selector to global due to https://github.com/sveltejs/svelte/issues/10143 -> https://github.com/sveltejs/svelte/pull/10208 */
-  .creatable-row :global(> .is-loading) {
-    position: relative;
-    &:after {
-      left: calc(100% + 4px);
+    & > .is-loading {
+      position: relative;
+      &:after {
+        left: calc(100% + 4px);
+      }
     }
   }
 
@@ -1913,11 +1872,15 @@
 
   /** #region input */
   .sv-input--sizer {
-    position: absolute;
-    pointer-events: none;
+    position: relative;
     display: inline-grid;
     vertical-align: top;
     align-items: center;
+
+    &:not(:focus-within) {
+      position: absolute;
+      pointer-events: none;
+    }
 
     &:after {
       content: attr(data-value) ' ';
@@ -1925,15 +1888,10 @@
       white-space: pre-wrap;
     }
   }
-  .is-focused .sv-input--sizer {
-    position: relative;
-    pointer-events: all;
-  }
   .has-items .keep-value:not(:focus) {
     color: transparent;
   }
-  /* moved selector to global due to https://github.com/sveltejs/svelte/issues/10143 -> https://github.com/sveltejs/svelte/pull/10208 */
-  .is-focused :global(.is-single.has-items.has-input > .sv-item--container) {
+  .is-focused .is-single.has-items.has-input > .sv-item--container {
     opacity: 0.2;
   }
   .sv-input--sizer:after,
@@ -1951,6 +1909,7 @@
   }
   .has-items .sv-input--text {
     padding-left: 0;
+    margin-left: -2px;
   }
 
   .sv-input--text {
